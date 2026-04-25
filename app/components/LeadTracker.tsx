@@ -183,8 +183,9 @@ export default function LeadTracker() {
   });
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [sortMode, setSortMode] = useState<"priority" | "tier" | "name">("priority");
-  const [statusFilter, setStatusFilter] = useState<Set<LeadStatus>>(
-    () => new Set(LEAD_STATUS_OPTIONS)
+  const [leadStatusFilter, setLeadStatusFilter] = useState<"all" | LeadStatus>("all");
+  const [websiteStatusFilter, setWebsiteStatusFilter] = useState<"all" | WebsiteStatus>(
+    "all"
   );
 
   useEffect(() => {
@@ -248,7 +249,11 @@ export default function LeadTracker() {
   }, [leads, meta]);
 
   const filteredSorted = useMemo(() => {
-    const filtered = leads.filter((l) => statusFilter.has(l.leadStatus));
+    const filtered = leads.filter(
+      (l) =>
+        (leadStatusFilter === "all" || l.leadStatus === leadStatusFilter) &&
+        (websiteStatusFilter === "all" || l.websiteStatus === websiteStatusFilter)
+    );
     const sorted = [...filtered];
     sorted.sort((a, b) => {
       if (sortMode === "priority") {
@@ -268,13 +273,18 @@ export default function LeadTracker() {
       return a.businessName.localeCompare(b.businessName);
     });
     return sorted;
-  }, [leads, statusFilter, sortMode]);
+  }, [leads, leadStatusFilter, websiteStatusFilter, sortMode]);
 
   const addLead = () => {
     const n = emptyLead();
     setLeads((prev) => [n, ...prev]);
     setExpandedId(n.id);
   };
+
+  const deleteLead = useCallback((id: string) => {
+    setLeads((prev) => prev.filter((l) => l.id !== id));
+    setExpandedId((eid) => (eid === id ? null : eid));
+  }, []);
 
   const exportCsv = () => {
     const headers = [
@@ -305,19 +315,6 @@ export default function LeadTracker() {
     a.download = `leads-backup-${todayKey()}.csv`;
     a.click();
     URL.revokeObjectURL(url);
-  };
-
-  const toggleStatusFilter = (s: LeadStatus) => {
-    setStatusFilter((prev) => {
-      const next = new Set(prev);
-      if (next.has(s)) {
-        if (next.size === 1) return prev;
-        next.delete(s);
-      } else {
-        next.add(s);
-      }
-      return next;
-    });
   };
 
   if (!mounted) {
@@ -380,13 +377,13 @@ export default function LeadTracker() {
         </section>
 
         <section className="mb-6 space-y-4 rounded-xl border border-[var(--border)] bg-[var(--bg-card)] p-4 sm:p-5">
-          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-            <label className="flex flex-col gap-1.5 sm:flex-row sm:items-center sm:gap-3">
-              <span className="text-xs font-medium uppercase tracking-wider text-[var(--text-muted)]">
+          <div className="flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-end sm:gap-x-6 sm:gap-y-3">
+            <label className="flex min-w-0 flex-col gap-1.5 sm:flex-row sm:items-center sm:gap-3">
+              <span className="shrink-0 text-xs font-medium uppercase tracking-wider text-[var(--text-muted)]">
                 Sort
               </span>
               <select
-                className="lead-select max-w-full sm:max-w-xs"
+                className="lead-select max-w-full sm:max-w-[220px]"
                 value={sortMode}
                 onChange={(e) =>
                   setSortMode(e.target.value as "priority" | "tier" | "name")
@@ -397,37 +394,53 @@ export default function LeadTracker() {
                 <option value="name">Business name A–Z</option>
               </select>
             </label>
-          </div>
-          <div>
-            <p className="mb-2 text-xs font-medium uppercase tracking-wider text-[var(--text-muted)]">
-              Lead status filter
-            </p>
-            <div className="flex flex-wrap gap-2">
-              {LEAD_STATUS_OPTIONS.map((s) => {
-                const on = statusFilter.has(s);
-                return (
-                  <button
-                    key={s}
-                    type="button"
-                    onClick={() => toggleStatusFilter(s)}
-                    className={`rounded-full px-3 py-1.5 text-xs font-medium transition ${
-                      on
-                        ? `${leadStatusClass(s)}`
-                        : "bg-[#0a0a0a] text-zinc-600 ring-1 ring-zinc-800 line-through opacity-60"
-                    }`}
-                  >
-                    {s}
-                  </button>
-                );
-              })}
-            </div>
+            <label className="flex min-w-0 flex-col gap-1.5 sm:flex-row sm:items-center sm:gap-3">
+              <span className="shrink-0 text-xs font-medium uppercase tracking-wider text-[var(--text-muted)]">
+                Lead status
+              </span>
+              <select
+                className="lead-select max-w-full sm:max-w-[220px]"
+                value={leadStatusFilter}
+                onChange={(e) => {
+                  const v = e.target.value;
+                  setLeadStatusFilter(v === "all" ? "all" : (v as LeadStatus));
+                }}
+              >
+                <option value="all">All statuses</option>
+                {LEAD_STATUS_OPTIONS.map((o) => (
+                  <option key={o} value={o}>
+                    {o}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="flex min-w-0 flex-col gap-1.5 sm:flex-row sm:items-center sm:gap-3">
+              <span className="shrink-0 text-xs font-medium uppercase tracking-wider text-[var(--text-muted)]">
+                Website
+              </span>
+              <select
+                className="lead-select max-w-full sm:max-w-[220px]"
+                value={websiteStatusFilter}
+                onChange={(e) => {
+                  const v = e.target.value;
+                  setWebsiteStatusFilter(v === "all" ? "all" : (v as WebsiteStatus));
+                }}
+              >
+                <option value="all">All website types</option>
+                {WEBSITE_OPTIONS.map((o) => (
+                  <option key={o} value={o}>
+                    {o}
+                  </option>
+                ))}
+              </select>
+            </label>
           </div>
         </section>
 
         <div className="space-y-2">
           {filteredSorted.length === 0 ? (
             <p className="rounded-xl border border-dashed border-[var(--border)] bg-[var(--bg-card)] px-4 py-12 text-center text-sm text-[var(--text-muted)]">
-              No leads match your filters. Adjust status chips or add a business.
+              No leads match your filters. Change the dropdowns or add a business.
             </p>
           ) : (
             filteredSorted.map((lead) => (
@@ -439,6 +452,7 @@ export default function LeadTracker() {
                   setExpandedId((id) => (id === lead.id ? null : lead.id))
                 }
                 onChange={(field, value) => setLeadField(lead.id, field, value)}
+                onDelete={() => deleteLead(lead.id)}
               />
             ))
           )}
@@ -453,11 +467,13 @@ function LeadRow({
   expanded,
   onToggle,
   onChange,
+  onDelete,
 }: {
   lead: Lead;
   expanded: boolean;
   onToggle: () => void;
   onChange: (field: keyof Lead, value: string) => void;
+  onDelete: () => void;
 }) {
   const telHref =
     lead.phone.trim() === ""
@@ -605,6 +621,25 @@ function LeadRow({
                 rows={4}
               />
             </Field>
+          </div>
+          <div className="mt-6 flex justify-end border-t border-[var(--border)] pt-4">
+            <button
+              type="button"
+              onClick={() => {
+                const label =
+                  lead.businessName.trim() || "Untitled business";
+                if (
+                  window.confirm(
+                    `Delete "${label}"? This removes the lead from your tracker and cannot be undone.`
+                  )
+                ) {
+                  onDelete();
+                }
+              }}
+              className="rounded-lg border border-red-800/70 bg-red-950/40 px-4 py-2 text-sm font-medium text-red-200 transition hover:bg-red-950/70 active:scale-[0.98]"
+            >
+              Delete business
+            </button>
           </div>
         </div>
       )}
