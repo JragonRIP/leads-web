@@ -8,6 +8,11 @@ import {
   useState,
 } from "react";
 
+import {
+  WIMI_BATCH1_IMPORT_KEY,
+  WIMI_BATCH1_SEEDS,
+} from "../data/wiMiBatch1";
+
 const STORAGE_KEY = "leadTracker_v1";
 
 const WEBSITE_OPTIONS = [
@@ -87,6 +92,43 @@ function newId(): string {
   return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 9)}`;
 }
 
+function phoneDigits(phone: string): string {
+  return phone.replace(/\D/g, "");
+}
+
+/** One-time: prepends WI / UP MI batch; skips rows whose phone already exists (digits). */
+function mergeWiMiBatch1IfNeeded(existing: Lead[]): Lead[] {
+  if (typeof window === "undefined") return existing;
+  try {
+    if (localStorage.getItem(WIMI_BATCH1_IMPORT_KEY)) return existing;
+
+    const seen = new Set(existing.map((l) => phoneDigits(l.phone)).filter(Boolean));
+    const additions: Lead[] = [];
+
+    for (const row of WIMI_BATCH1_SEEDS) {
+      const d = phoneDigits(row.phone);
+      if (!d || seen.has(d)) continue;
+      seen.add(d);
+      additions.push({
+        id: newId(),
+        businessName: row.businessName,
+        phone: row.phone,
+        websiteStatus: "No Website",
+        leadStatus: "Not Called",
+        priority: row.priority,
+        recommendedTier: row.tier,
+        notes: `${row.trade} · ${row.location}`,
+      });
+    }
+
+    localStorage.setItem(WIMI_BATCH1_IMPORT_KEY, "1");
+    if (additions.length === 0) return existing;
+    return [...additions, ...existing];
+  } catch {
+    return existing;
+  }
+}
+
 function emptyLead(): Lead {
   return {
     id: newId(),
@@ -148,7 +190,11 @@ export default function LeadTracker() {
   useEffect(() => {
     startTransition(() => {
       const p = loadPersisted();
-      setLeads(p.leads);
+      const merged = mergeWiMiBatch1IfNeeded(p.leads);
+      if (merged !== p.leads) {
+        savePersisted({ leads: merged, meta: p.meta });
+      }
+      setLeads(merged);
       setMeta(p.meta);
       setMounted(true);
     });
