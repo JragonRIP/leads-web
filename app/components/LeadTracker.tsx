@@ -56,12 +56,25 @@ export type Lead = {
   addedAt: number;
 };
 
+const META_VERSION = 2;
+
 type TrackerMeta = {
   dayKey: string;
   callsToday: number;
-  /** Cumulative call attempts (Called / voicemail); never reset by day change. */
+  /** Call attempts on days before `dayKey` (rolled from each prior day’s `callsToday`). */
   callsLifetime: number;
+  metaVersion: number;
 };
+
+function rollMetaToNewDay(m: TrackerMeta, newDayKey: string): TrackerMeta {
+  if (m.dayKey === newDayKey) return { ...m, metaVersion: META_VERSION };
+  return {
+    dayKey: newDayKey,
+    callsToday: 0,
+    callsLifetime: (m.callsLifetime ?? 0) + (m.callsToday ?? 0),
+    metaVersion: META_VERSION,
+  };
+}
 
 type Persisted = {
   leads: Lead[];
@@ -85,29 +98,58 @@ function normalizeLeadArray(raw: unknown): Lead[] {
 }
 
 function normalizeMeta(stored: Partial<TrackerMeta> | undefined, dayKey: string): TrackerMeta {
-  const callsLifetime =
+  let callsLifetime =
     typeof stored?.callsLifetime === "number" ? stored.callsLifetime : 0;
-  const sameDay = stored?.dayKey === dayKey;
-  const callsToday =
-    sameDay && typeof stored?.callsToday === "number" ? stored.callsToday : 0;
-  return { dayKey, callsToday, callsLifetime };
+  let callsToday =
+    typeof stored?.callsToday === "number" ? stored.callsToday : 0;
+  const storedDay = stored?.dayKey;
+  const sameDay = Boolean(storedDay) && storedDay === dayKey;
+
+  // New calendar day since last save: merge yesterday’s tally into lifetime.
+  if (!sameDay && storedDay) {
+    callsLifetime += callsToday;
+    callsToday = 0;
+  }
+
+  let metaVersion =
+    typeof stored?.metaVersion === "number" ? stored.metaVersion : 1;
+
+  // Older builds incremented callsLifetime on every dial *and* kept callsToday — double count
+  // if we sum them. Split so lifetime = prior days only for the same calendar day.
+  if (
+    metaVersion < META_VERSION &&
+    Boolean(storedDay) &&
+    storedDay === dayKey &&
+    callsToday > 0 &&
+    callsLifetime >= callsToday
+  ) {
+    callsLifetime -= callsToday;
+  }
+
+  return {
+    dayKey,
+    callsToday,
+    callsLifetime,
+    metaVersion: META_VERSION,
+  };
 }
 
 function loadPersisted(): Persisted {
   const dayKey = todayKey();
   if (typeof window === "undefined") {
-    return { leads: [], meta: { dayKey, callsToday: 0, callsLifetime: 0 } };
+    return { leads: [], meta: { dayKey, callsToday: 0, callsLifetime: 0, metaVersion: META_VERSION } };
   }
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
-    if (!raw) return { leads: [], meta: { dayKey, callsToday: 0, callsLifetime: 0 } };
+    if (!raw)
+      return { leads: [], meta: { dayKey, callsToday: 0, callsLifetime: 0, metaVersion: META_VERSION } };
     const parsed = JSON.parse(raw) as Persisted;
     return {
       leads: normalizeLeadArray(parsed.leads),
       meta: normalizeMeta(parsed.meta, dayKey),
     };
   } catch {
-    return { leads: [], meta: { dayKey, callsToday: 0, callsLifetime: 0 } };
+    return { leads: [], meta: { dayKey, callsToday: 0, callsLifetime: 0, metaVersion: META_VERSION } };
   }
 }
 
@@ -230,6 +272,7 @@ export default function LeadTracker() {
     dayKey: "",
     callsToday: 0,
     callsLifetime: 0,
+    metaVersion: META_VERSION,
   });
   const [expandedId, setExpandedId] = useState<string | null>(null);
   /** Until you expand another lead or collapse, newest “Add business” row stays first in the list. */
@@ -260,11 +303,7 @@ export default function LeadTracker() {
     const dayKey = todayKey();
     if (meta.dayKey !== dayKey) {
       startTransition(() => {
-        setMeta((m) => ({
-          dayKey,
-          callsToday: 0,
-          callsLifetime: m.callsLifetime,
-        }));
+        setMeta((m) => rollMetaToNewDay(m, dayKey));
       });
       return;
     }
@@ -290,16 +329,13 @@ export default function LeadTracker() {
           ((value === "Called" && prevStatus !== "Called") ||
             (value === "Went to Voicemail" && prevStatus !== "Went to Voicemail"));
         if (countsAsCallAttempt) {
-          const dayKey = todayKey();
+          const dk = todayKey();
           setMeta((m) => {
-            const base =
-              m.dayKey !== dayKey
-                ? { dayKey, callsToday: 0, callsLifetime: m.callsLifetime }
-                : m;
+            const base = m.dayKey === dk ? m : rollMetaToNewDay(m, dk);
             return {
               ...base,
-              callsToday: base.callsToday + 1,
-              callsLifetime: base.callsLifetime + 1,
+              callsToday: (base.callsToday ?? 0) + 1,
+              metaVersion: META_VERSION,
             };
           });
         }
@@ -320,10 +356,11 @@ export default function LeadTracker() {
     const dayKey = todayKey();
     const callsToday =
       meta.dayKey === dayKey ? meta.callsToday : 0;
-    const callsLifetime = meta.callsLifetime;
+    const callsLifetimePrior = meta.callsLifetime ?? 0;
+    const totalCallsAllTime = callsLifetimePrior + callsToday;
     const turnoverPct =
-      callsLifetime > 0
-        ? Math.round((booked / callsLifetime) * 1000) / 10
+      totalCallsAllTime > 0
+        ? Math.round((booked / totalCallsAllTime) * 1000) / 10
         : null;
     return {
       total,
@@ -331,7 +368,8 @@ export default function LeadTracker() {
       interested,
       booked,
       callsToday,
-      callsLifetime,
+      callsLifetimePrior,
+      totalCallsAllTime,
       turnoverPct,
     };
   }, [leads, meta]);
@@ -475,7 +513,7 @@ export default function LeadTracker() {
             { label: "Calls today", value: dashboard.callsToday },
             {
               label: "Total calls (all time)",
-              value: dashboard.callsLifetime,
+              value: dashboard.totalCallsAllTime,
               sub:
                 dashboard.turnoverPct !== null
                   ? `${dashboard.turnoverPct}% turnover`
