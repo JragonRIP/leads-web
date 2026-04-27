@@ -113,6 +113,17 @@ function phoneDigits(phone: string): string {
   return phone.replace(/\D/g, "");
 }
 
+function leadMatchesSearch(lead: Lead, raw: string): boolean {
+  const q = raw.trim().toLowerCase();
+  if (!q) return true;
+  if (lead.businessName.toLowerCase().includes(q)) return true;
+  const searchDigits = phoneDigits(raw);
+  if (searchDigits.length > 0 && phoneDigits(lead.phone).includes(searchDigits)) {
+    return true;
+  }
+  return false;
+}
+
 /** One-time: prepends WI / UP MI batch; skips rows whose phone already exists (digits). */
 function mergeWiMiBatch1IfNeeded(existing: Lead[]): Lead[] {
   if (typeof window === "undefined") return existing;
@@ -218,6 +229,7 @@ export default function LeadTracker() {
   const [websiteStatusFilter, setWebsiteStatusFilter] = useState<"all" | WebsiteStatus>(
     "all"
   );
+  const [searchQuery, setSearchQuery] = useState("");
 
   useEffect(() => {
     startTransition(() => {
@@ -292,6 +304,7 @@ export default function LeadTracker() {
   const filteredSorted = useMemo(() => {
     const filtered = leads.filter(
       (l) =>
+        leadMatchesSearch(l, searchQuery) &&
         (leadStatusFilter === "all" || l.leadStatus === leadStatusFilter) &&
         (websiteStatusFilter === "all" || l.websiteStatus === websiteStatusFilter)
     );
@@ -323,7 +336,7 @@ export default function LeadTracker() {
       }
     }
     return sorted;
-  }, [leads, leadStatusFilter, websiteStatusFilter, sortMode, pinToTopId]);
+  }, [leads, searchQuery, leadStatusFilter, websiteStatusFilter, sortMode, pinToTopId]);
 
   const addLead = () => {
     const n = emptyLead();
@@ -443,6 +456,20 @@ export default function LeadTracker() {
         </section>
 
         <section className="mb-6 space-y-4 rounded-xl border border-[var(--border)] bg-[var(--bg-card)] p-4 sm:p-5">
+          <label className="block">
+            <span className="mb-1.5 block text-xs font-medium uppercase tracking-wider text-[var(--text-muted)]">
+              Search
+            </span>
+            <input
+              type="search"
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              placeholder="Business name or phone…"
+              autoComplete="off"
+              className="lead-input w-full max-w-xl"
+              spellCheck={false}
+            />
+          </label>
           <div className="flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-end sm:gap-x-6 sm:gap-y-3">
             <label className="flex min-w-0 flex-col gap-1.5 sm:flex-row sm:items-center sm:gap-3">
               <span className="shrink-0 text-xs font-medium uppercase tracking-wider text-[var(--text-muted)]">
@@ -506,7 +533,7 @@ export default function LeadTracker() {
         <div className="space-y-2">
           {filteredSorted.length === 0 ? (
             <p className="rounded-xl border border-dashed border-[var(--border)] bg-[var(--bg-card)] px-4 py-12 text-center text-sm text-[var(--text-muted)]">
-              No leads match your filters. Change the dropdowns or add a business.
+              No leads match your filters or search. Adjust the search, dropdowns, or add a business.
             </p>
           ) : (
             filteredSorted.map((lead) => (
