@@ -25,6 +25,7 @@ const WEBSITE_OPTIONS = [
 const LEAD_STATUS_OPTIONS = [
   "Not Called",
   "Called",
+  "Went to Voicemail",
   "Interested",
   "Demo Built",
   "Booked",
@@ -164,6 +165,8 @@ function leadStatusClass(status: LeadStatus): string {
       return "bg-amber-950/80 text-amber-200 ring-1 ring-amber-600/40";
     case "Not Called":
       return "bg-zinc-800/90 text-zinc-400 ring-1 ring-zinc-600/40";
+    case "Went to Voicemail":
+      return "bg-sky-950/80 text-sky-200 ring-1 ring-sky-700/45";
     default:
       return "bg-[var(--gold-muted)] text-[var(--gold)] ring-1 ring-[var(--gold-dim)]/40";
   }
@@ -222,7 +225,11 @@ export default function LeadTracker() {
         const prevStatus = current.leadStatus;
         const next: Lead = { ...current, [field]: value } as Lead;
 
-        if (field === "leadStatus" && value === "Called" && prevStatus !== "Called") {
+        const countsAsCallAttempt =
+          field === "leadStatus" &&
+          ((value === "Called" && prevStatus !== "Called") ||
+            (value === "Went to Voicemail" && prevStatus !== "Went to Voicemail"));
+        if (countsAsCallAttempt) {
           const dayKey = todayKey();
           setMeta((m) => {
             const base = m.dayKey !== dayKey ? { dayKey, callsToday: 0 } : m;
