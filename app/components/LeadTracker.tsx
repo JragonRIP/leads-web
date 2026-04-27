@@ -56,9 +56,16 @@ export type Lead = {
   addedAt: number;
 };
 
+type TrackerMeta = {
+  dayKey: string;
+  callsToday: number;
+  /** Cumulative call attempts (Called / voicemail); never reset by day change. */
+  callsLifetime: number;
+};
+
 type Persisted = {
   leads: Lead[];
-  meta: { dayKey: string; callsToday: number };
+  meta: TrackerMeta;
 };
 
 function todayKey(): string {
@@ -77,27 +84,30 @@ function normalizeLeadArray(raw: unknown): Lead[] {
   });
 }
 
+function normalizeMeta(stored: Partial<TrackerMeta> | undefined, dayKey: string): TrackerMeta {
+  const callsLifetime =
+    typeof stored?.callsLifetime === "number" ? stored.callsLifetime : 0;
+  const sameDay = stored?.dayKey === dayKey;
+  const callsToday =
+    sameDay && typeof stored?.callsToday === "number" ? stored.callsToday : 0;
+  return { dayKey, callsToday, callsLifetime };
+}
+
 function loadPersisted(): Persisted {
+  const dayKey = todayKey();
   if (typeof window === "undefined") {
-    return { leads: [], meta: { dayKey: todayKey(), callsToday: 0 } };
+    return { leads: [], meta: { dayKey, callsToday: 0, callsLifetime: 0 } };
   }
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
-    if (!raw) return { leads: [], meta: { dayKey: todayKey(), callsToday: 0 } };
+    if (!raw) return { leads: [], meta: { dayKey, callsToday: 0, callsLifetime: 0 } };
     const parsed = JSON.parse(raw) as Persisted;
-    const dayKey = todayKey();
-    if (!parsed.meta || parsed.meta.dayKey !== dayKey) {
-      return {
-        leads: normalizeLeadArray(parsed.leads),
-        meta: { dayKey, callsToday: 0 },
-      };
-    }
     return {
       leads: normalizeLeadArray(parsed.leads),
-      meta: parsed.meta,
+      meta: normalizeMeta(parsed.meta, dayKey),
     };
   } catch {
-    return { leads: [], meta: { dayKey: todayKey(), callsToday: 0 } };
+    return { leads: [], meta: { dayKey, callsToday: 0, callsLifetime: 0 } };
   }
 }
 
@@ -216,9 +226,10 @@ function escapeCsvCell(s: string): string {
 export default function LeadTracker() {
   const [mounted, setMounted] = useState(false);
   const [leads, setLeads] = useState<Lead[]>([]);
-  const [meta, setMeta] = useState<{ dayKey: string; callsToday: number }>({
+  const [meta, setMeta] = useState<TrackerMeta>({
     dayKey: "",
     callsToday: 0,
+    callsLifetime: 0,
   });
   const [expandedId, setExpandedId] = useState<string | null>(null);
   /** Until you expand another lead or collapse, newest “Add business” row stays first in the list. */
@@ -249,7 +260,11 @@ export default function LeadTracker() {
     const dayKey = todayKey();
     if (meta.dayKey !== dayKey) {
       startTransition(() => {
-        setMeta({ dayKey, callsToday: 0 });
+        setMeta((m) => ({
+          dayKey,
+          callsToday: 0,
+          callsLifetime: m.callsLifetime,
+        }));
       });
       return;
     }
@@ -277,8 +292,15 @@ export default function LeadTracker() {
         if (countsAsCallAttempt) {
           const dayKey = todayKey();
           setMeta((m) => {
-            const base = m.dayKey !== dayKey ? { dayKey, callsToday: 0 } : m;
-            return { ...base, callsToday: base.callsToday + 1 };
+            const base =
+              m.dayKey !== dayKey
+                ? { dayKey, callsToday: 0, callsLifetime: m.callsLifetime }
+                : m;
+            return {
+              ...base,
+              callsToday: base.callsToday + 1,
+              callsLifetime: base.callsLifetime + 1,
+            };
           });
         }
 
@@ -298,7 +320,20 @@ export default function LeadTracker() {
     const dayKey = todayKey();
     const callsToday =
       meta.dayKey === dayKey ? meta.callsToday : 0;
-    return { total, notCalledYet, interested, booked, callsToday };
+    const callsLifetime = meta.callsLifetime;
+    const turnoverPct =
+      callsLifetime > 0
+        ? Math.round((booked / callsLifetime) * 1000) / 10
+        : null;
+    return {
+      total,
+      notCalledYet,
+      interested,
+      booked,
+      callsToday,
+      callsLifetime,
+      turnoverPct,
+    };
   }, [leads, meta]);
 
   const filteredSorted = useMemo(() => {
@@ -433,11 +468,20 @@ export default function LeadTracker() {
           </div>
         </header>
 
-        <section className="mb-8 grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
+        <section className="mb-8 grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-3">
           {[
             { label: "Total leads", value: dashboard.total },
             { label: "Not called yet", value: dashboard.notCalledYet },
             { label: "Calls today", value: dashboard.callsToday },
+            {
+              label: "Total calls (all time)",
+              value: dashboard.callsLifetime,
+              sub:
+                dashboard.turnoverPct !== null
+                  ? `${dashboard.turnoverPct}% turnover`
+                  : "—",
+              subHint: "Booked ÷ total calls",
+            },
             { label: "Interested", value: dashboard.interested },
             { label: "Booked", value: dashboard.booked },
           ].map((card) => (
@@ -451,6 +495,14 @@ export default function LeadTracker() {
               <p className="mt-1 text-2xl font-semibold tabular-nums text-[var(--gold)]">
                 {card.value}
               </p>
+              {"sub" in card && card.sub !== undefined ? (
+                <p
+                  className="mt-1 text-sm tabular-nums text-[var(--text-muted)]"
+                  title={"subHint" in card ? card.subHint : undefined}
+                >
+                  {card.sub}
+                </p>
+              ) : null}
             </div>
           ))}
         </section>
