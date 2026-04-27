@@ -1,10 +1,13 @@
 "use client";
 
 import {
+  forwardRef,
   startTransition,
   useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
+  useRef,
   useState,
 } from "react";
 
@@ -49,6 +52,8 @@ export type Lead = {
   priority: Priority;
   recommendedTier: Tier;
   notes: string;
+  /** Creation time for ordering (newer leads sort earlier within the same priority/tier). */
+  addedAt: number;
 };
 
 type Persisted = {
@@ -59,6 +64,17 @@ type Persisted = {
 function todayKey(): string {
   const d = new Date();
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+
+function normalizeLeadArray(raw: unknown): Lead[] {
+  if (!Array.isArray(raw)) return [];
+  return raw.map((item) => {
+    const l = item as Lead;
+    return {
+      ...l,
+      addedAt: typeof l.addedAt === "number" ? l.addedAt : 0,
+    };
+  });
 }
 
 function loadPersisted(): Persisted {
@@ -72,12 +88,12 @@ function loadPersisted(): Persisted {
     const dayKey = todayKey();
     if (!parsed.meta || parsed.meta.dayKey !== dayKey) {
       return {
-        leads: Array.isArray(parsed.leads) ? parsed.leads : [],
+        leads: normalizeLeadArray(parsed.leads),
         meta: { dayKey, callsToday: 0 },
       };
     }
     return {
-      leads: Array.isArray(parsed.leads) ? parsed.leads : [],
+      leads: normalizeLeadArray(parsed.leads),
       meta: parsed.meta,
     };
   } catch {
@@ -119,6 +135,7 @@ function mergeWiMiBatch1IfNeeded(existing: Lead[]): Lead[] {
         priority: row.priority,
         recommendedTier: row.tier,
         notes: `${row.trade} · ${row.location}`,
+        addedAt: 0,
       });
     }
 
@@ -140,6 +157,7 @@ function emptyLead(): Lead {
     priority: "Medium",
     recommendedTier: "Starter",
     notes: "",
+    addedAt: Date.now(),
   };
 }
 
@@ -154,6 +172,13 @@ const TIER_ORDER: Record<Tier, number> = {
   Pro: 1,
   Store: 2,
 };
+
+/** Newer leads first when priority/tier match; then name. */
+function compareLeadTieBreak(a: Lead, b: Lead): number {
+  const byTime = b.addedAt - a.addedAt;
+  if (byTime !== 0) return byTime;
+  return a.businessName.localeCompare(b.businessName);
+}
 
 function leadStatusClass(status: LeadStatus): string {
   switch (status) {
@@ -185,6 +210,9 @@ export default function LeadTracker() {
     callsToday: 0,
   });
   const [expandedId, setExpandedId] = useState<string | null>(null);
+  /** Until you expand another lead or collapse, newest “Add business” row stays first in the list. */
+  const [pinToTopId, setPinToTopId] = useState<string | null>(null);
+  const expandedCardRef = useRef<HTMLElement | null>(null);
   const [sortMode, setSortMode] = useState<"priority" | "tier" | "name">("priority");
   const [leadStatusFilter, setLeadStatusFilter] = useState<"all" | LeadStatus>("all");
   const [websiteStatusFilter, setWebsiteStatusFilter] = useState<"all" | WebsiteStatus>(
@@ -215,6 +243,11 @@ export default function LeadTracker() {
     }
     savePersisted({ leads, meta });
   }, [mounted, leads, meta]);
+
+  useEffect(() => {
+    if (pinToTopId === null) return;
+    if (expandedId !== pinToTopId) setPinToTopId(null);
+  }, [expandedId, pinToTopId]);
 
   const setLeadField = useCallback(
     (id: string, field: keyof Lead, value: string) => {
@@ -247,12 +280,13 @@ export default function LeadTracker() {
 
   const dashboard = useMemo(() => {
     const total = leads.length;
+    const notCalledYet = leads.filter((l) => l.leadStatus === "Not Called").length;
     const interested = leads.filter((l) => l.leadStatus === "Interested").length;
     const booked = leads.filter((l) => l.leadStatus === "Booked").length;
     const dayKey = todayKey();
     const callsToday =
       meta.dayKey === dayKey ? meta.callsToday : 0;
-    return { total, interested, booked, callsToday };
+    return { total, notCalledYet, interested, booked, callsToday };
   }, [leads, meta]);
 
   const filteredSorted = useMemo(() => {
@@ -268,30 +302,54 @@ export default function LeadTracker() {
         if (p !== 0) return p;
         const t = TIER_ORDER[a.recommendedTier] - TIER_ORDER[b.recommendedTier];
         if (t !== 0) return t;
-        return a.businessName.localeCompare(b.businessName);
+        return compareLeadTieBreak(a, b);
       }
       if (sortMode === "tier") {
         const t = TIER_ORDER[a.recommendedTier] - TIER_ORDER[b.recommendedTier];
         if (t !== 0) return t;
         const p = PRIORITY_ORDER[a.priority] - PRIORITY_ORDER[b.priority];
         if (p !== 0) return p;
-        return a.businessName.localeCompare(b.businessName);
+        return compareLeadTieBreak(a, b);
       }
-      return a.businessName.localeCompare(b.businessName);
+      const byName = a.businessName.localeCompare(b.businessName);
+      if (byName !== 0) return byName;
+      return b.addedAt - a.addedAt;
     });
+    if (pinToTopId) {
+      const ix = sorted.findIndex((l) => l.id === pinToTopId);
+      if (ix > 0) {
+        const [row] = sorted.splice(ix, 1);
+        sorted.unshift(row);
+      }
+    }
     return sorted;
-  }, [leads, leadStatusFilter, websiteStatusFilter, sortMode]);
+  }, [leads, leadStatusFilter, websiteStatusFilter, sortMode, pinToTopId]);
 
   const addLead = () => {
     const n = emptyLead();
     setLeads((prev) => [n, ...prev]);
     setExpandedId(n.id);
+    setPinToTopId(n.id);
   };
 
   const deleteLead = useCallback((id: string) => {
     setLeads((prev) => prev.filter((l) => l.id !== id));
     setExpandedId((eid) => (eid === id ? null : eid));
+    setPinToTopId((pin) => (pin === id ? null : pin));
   }, []);
+
+  const listOrderKey = useMemo(
+    () => filteredSorted.map((l) => l.id).join("\0"),
+    [filteredSorted]
+  );
+
+  useLayoutEffect(() => {
+    if (!expandedId) return;
+    expandedCardRef.current?.scrollIntoView({
+      block: "nearest",
+      behavior: "smooth",
+    });
+  }, [expandedId, listOrderKey]);
 
   const exportCsv = () => {
     const headers = [
@@ -362,9 +420,10 @@ export default function LeadTracker() {
           </div>
         </header>
 
-        <section className="mb-8 grid grid-cols-2 gap-3 sm:grid-cols-4">
+        <section className="mb-8 grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
           {[
             { label: "Total leads", value: dashboard.total },
+            { label: "Not called yet", value: dashboard.notCalledYet },
             { label: "Calls today", value: dashboard.callsToday },
             { label: "Interested", value: dashboard.interested },
             { label: "Booked", value: dashboard.booked },
@@ -453,6 +512,7 @@ export default function LeadTracker() {
             filteredSorted.map((lead) => (
               <LeadRow
                 key={lead.id}
+                ref={expandedId === lead.id ? expandedCardRef : undefined}
                 lead={lead}
                 expanded={expandedId === lead.id}
                 onToggle={() =>
@@ -469,19 +529,22 @@ export default function LeadTracker() {
   );
 }
 
-function LeadRow({
-  lead,
-  expanded,
-  onToggle,
-  onChange,
-  onDelete,
-}: {
-  lead: Lead;
-  expanded: boolean;
-  onToggle: () => void;
-  onChange: (field: keyof Lead, value: string) => void;
-  onDelete: () => void;
-}) {
+const LeadRow = forwardRef(function LeadRow(
+  {
+    lead,
+    expanded,
+    onToggle,
+    onChange,
+    onDelete,
+  }: {
+    lead: Lead;
+    expanded: boolean;
+    onToggle: () => void;
+    onChange: (field: keyof Lead, value: string) => void;
+    onDelete: () => void;
+  },
+  ref: React.Ref<HTMLElement>
+) {
   const telHref =
     lead.phone.trim() === ""
       ? undefined
@@ -489,6 +552,7 @@ function LeadRow({
 
   return (
     <article
+      ref={ref}
       className={`overflow-hidden rounded-xl border transition-colors ${
         expanded
           ? "border-[var(--gold-dim)] bg-[var(--bg-elevated)] ring-1 ring-[var(--gold)]/20"
@@ -652,7 +716,7 @@ function LeadRow({
       )}
     </article>
   );
-}
+});
 
 function Field({
   label,
