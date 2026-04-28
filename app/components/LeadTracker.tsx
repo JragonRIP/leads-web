@@ -291,7 +291,9 @@ export default function LeadTracker() {
   /** Until you expand another lead or collapse, newest “Add business” row stays first in the list. */
   const [pinToTopId, setPinToTopId] = useState<string | null>(null);
   const expandedCardRef = useRef<HTMLElement | null>(null);
-  const [sortMode, setSortMode] = useState<"priority" | "tier" | "name">("priority");
+  const [sortMode, setSortMode] = useState<"priority" | "tier" | "name" | "starred">(
+    "priority"
+  );
   const [leadStatusFilter, setLeadStatusFilter] = useState<"all" | LeadStatus>("all");
   const [websiteStatusFilter, setWebsiteStatusFilter] = useState<"all" | WebsiteStatus>(
     "all"
@@ -408,6 +410,10 @@ export default function LeadTracker() {
         if (t !== 0) return t;
         const p = PRIORITY_ORDER[a.priority] - PRIORITY_ORDER[b.priority];
         if (p !== 0) return p;
+        return compareLeadTieBreak(a, b);
+      }
+      if (sortMode === "starred") {
+        if (a.starred !== b.starred) return a.starred ? -1 : 1;
         return compareLeadTieBreak(a, b);
       }
       const byName = a.businessName.localeCompare(b.businessName);
@@ -588,12 +594,13 @@ export default function LeadTracker() {
                 className="lead-select max-w-full sm:max-w-[220px]"
                 value={sortMode}
                 onChange={(e) =>
-                  setSortMode(e.target.value as "priority" | "tier" | "name")
+                  setSortMode(e.target.value as "priority" | "tier" | "name" | "starred")
                 }
               >
                 <option value="priority">Priority (high first)</option>
                 <option value="tier">Recommended tier</option>
                 <option value="name">Business name A–Z</option>
+                <option value="starred">Starred first</option>
               </select>
             </label>
             <label className="flex min-w-0 flex-col gap-1.5 sm:flex-row sm:items-center sm:gap-3">
