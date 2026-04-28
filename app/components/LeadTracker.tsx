@@ -256,6 +256,19 @@ function compareLeadTieBreak(a: Lead, b: Lead): number {
   return a.businessName.localeCompare(b.businessName);
 }
 
+function normalSortStatusRank(status: LeadStatus): number {
+  switch (status) {
+    case "Not Called":
+      return 0;
+    case "Interested":
+      return 1;
+    case "Dead":
+      return 3;
+    default:
+      return 2;
+  }
+}
+
 function leadStatusClass(status: LeadStatus): string {
   switch (status) {
     case "Booked":
@@ -399,6 +412,8 @@ export default function LeadTracker() {
     const sorted = [...filtered];
     sorted.sort((a, b) => {
       if (sortMode === "priority") {
+        const s = normalSortStatusRank(a.leadStatus) - normalSortStatusRank(b.leadStatus);
+        if (s !== 0) return s;
         const p = PRIORITY_ORDER[a.priority] - PRIORITY_ORDER[b.priority];
         if (p !== 0) return p;
         const t = TIER_ORDER[a.recommendedTier] - TIER_ORDER[b.recommendedTier];
