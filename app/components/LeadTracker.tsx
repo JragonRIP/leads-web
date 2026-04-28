@@ -54,6 +54,10 @@ export type Lead = {
   notes: string;
   /** Creation time for ordering (newer leads sort earlier within the same priority/tier). */
   addedAt: number;
+  /** True once this business has been counted as "called". */
+  callPointAwarded: boolean;
+  /** Mark standout/special businesses. */
+  starred: boolean;
 };
 
 const META_VERSION = 2;
@@ -93,6 +97,11 @@ function normalizeLeadArray(raw: unknown): Lead[] {
     return {
       ...l,
       addedAt: typeof l.addedAt === "number" ? l.addedAt : 0,
+      callPointAwarded:
+        typeof l.callPointAwarded === "boolean"
+          ? l.callPointAwarded
+          : l.leadStatus !== "Not Called",
+      starred: typeof l.starred === "boolean" ? l.starred : false,
     };
   });
 }
@@ -199,6 +208,8 @@ function mergeWiMiBatch1IfNeeded(existing: Lead[]): Lead[] {
         recommendedTier: row.tier,
         notes: `${row.trade} · ${row.location}`,
         addedAt: 0,
+        callPointAwarded: false,
+        starred: false,
       });
     }
 
@@ -221,6 +232,8 @@ function emptyLead(): Lead {
     recommendedTier: "Starter",
     notes: "",
     addedAt: Date.now(),
+    callPointAwarded: false,
+    starred: false,
   };
 }
 
@@ -321,14 +334,14 @@ export default function LeadTracker() {
         const idx = prev.findIndex((l) => l.id === id);
         if (idx === -1) return prev;
         const current = prev[idx];
-        const prevStatus = current.leadStatus;
         const next: Lead = { ...current, [field]: value } as Lead;
 
-        const countsAsCallAttempt =
+        const shouldAwardCallPoint =
           field === "leadStatus" &&
-          ((value === "Called" && prevStatus !== "Called") ||
-            (value === "Went to Voicemail" && prevStatus !== "Went to Voicemail"));
-        if (countsAsCallAttempt) {
+          value !== "Not Called" &&
+          !current.callPointAwarded;
+        if (shouldAwardCallPoint) {
+          next.callPointAwarded = true;
           const dk = todayKey();
           setMeta((m) => {
             const base = m.dayKey === dk ? m : rollMetaToNewDay(m, dk);
@@ -422,6 +435,12 @@ export default function LeadTracker() {
     setLeads((prev) => prev.filter((l) => l.id !== id));
     setExpandedId((eid) => (eid === id ? null : eid));
     setPinToTopId((pin) => (pin === id ? null : pin));
+  }, []);
+
+  const toggleLeadStar = useCallback((id: string) => {
+    setLeads((prev) =>
+      prev.map((l) => (l.id === id ? { ...l, starred: !l.starred } : l))
+    );
   }, []);
 
   const listOrderKey = useMemo(
@@ -636,6 +655,7 @@ export default function LeadTracker() {
                   setExpandedId((id) => (id === lead.id ? null : lead.id))
                 }
                 onChange={(field, value) => setLeadField(lead.id, field, value)}
+                onToggleStar={() => toggleLeadStar(lead.id)}
                 onDelete={() => deleteLead(lead.id)}
               />
             ))
@@ -652,12 +672,14 @@ const LeadRow = forwardRef(function LeadRow(
     expanded,
     onToggle,
     onChange,
+    onToggleStar,
     onDelete,
   }: {
     lead: Lead;
     expanded: boolean;
     onToggle: () => void;
     onChange: (field: keyof Lead, value: string) => void;
+    onToggleStar: () => void;
     onDelete: () => void;
   },
   ref: React.Ref<HTMLElement>
@@ -673,6 +695,8 @@ const LeadRow = forwardRef(function LeadRow(
       className={`overflow-hidden rounded-xl border transition-colors ${
         expanded
           ? "border-[var(--gold-dim)] bg-[var(--bg-elevated)] ring-1 ring-[var(--gold)]/20"
+          : lead.starred
+            ? "border-[var(--gold-dim)] bg-[var(--bg-card)] ring-1 ring-[var(--gold)]/20 hover:border-[#dfc056]"
           : "border-[var(--border)] bg-[var(--bg-card)] hover:border-zinc-700"
       }`}
     >
@@ -707,6 +731,22 @@ const LeadRow = forwardRef(function LeadRow(
         >
           {lead.leadStatus}
         </span>
+        <button
+          type="button"
+          aria-label={lead.starred ? "Unstar business" : "Star business"}
+          title={lead.starred ? "Unstar business" : "Star business"}
+          onClick={(e) => {
+            e.stopPropagation();
+            onToggleStar();
+          }}
+          className={`shrink-0 rounded-full p-1.5 transition ${
+            lead.starred
+              ? "text-[var(--gold)] hover:bg-[var(--gold-muted)]"
+              : "text-[var(--text-muted)] hover:text-[var(--gold)] hover:bg-zinc-800/70"
+          }`}
+        >
+          <Star filled={lead.starred} />
+        </button>
         <span
           className={`shrink-0 text-[var(--gold)] transition ${expanded ? "rotate-180" : ""}`}
           aria-hidden
@@ -861,6 +901,21 @@ function Chevron() {
         d="M6 9l6 6 6-6"
         stroke="currentColor"
         strokeWidth="2"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
+function Star({ filled }: { filled: boolean }) {
+  return (
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden>
+      <path
+        d="M12 3.75l2.37 4.8 5.3.77-3.84 3.74.91 5.28L12 15.86l-4.74 2.48.91-5.28L4.33 9.32l5.3-.77L12 3.75z"
+        fill={filled ? "currentColor" : "none"}
+        stroke="currentColor"
+        strokeWidth="1.8"
         strokeLinecap="round"
         strokeLinejoin="round"
       />
