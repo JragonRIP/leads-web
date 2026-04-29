@@ -17,6 +17,7 @@ import {
 } from "../data/wiMiBatch1";
 
 const STORAGE_KEY = "leadTracker_v1";
+const UI_STORAGE_KEY = "leadTracker_ui_v1";
 
 const WEBSITE_OPTIONS = [
   "No Website",
@@ -83,6 +84,13 @@ function rollMetaToNewDay(m: TrackerMeta, newDayKey: string): TrackerMeta {
 type Persisted = {
   leads: Lead[];
   meta: TrackerMeta;
+};
+
+type PersistedUi = {
+  sortMode: "priority" | "tier" | "name" | "starred";
+  leadStatusFilter: "all" | LeadStatus;
+  websiteStatusFilter: "all" | WebsiteStatus;
+  searchQuery: string;
 };
 
 function todayKey(): string {
@@ -164,6 +172,50 @@ function loadPersisted(): Persisted {
 
 function savePersisted(data: Persisted) {
   localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
+}
+
+function loadPersistedUi(): PersistedUi {
+  const defaults: PersistedUi = {
+    sortMode: "priority",
+    leadStatusFilter: "all",
+    websiteStatusFilter: "all",
+    searchQuery: "",
+  };
+  if (typeof window === "undefined") return defaults;
+  try {
+    const raw = localStorage.getItem(UI_STORAGE_KEY);
+    if (!raw) return defaults;
+    const parsed = JSON.parse(raw) as Partial<PersistedUi>;
+    return {
+      sortMode:
+        parsed.sortMode === "priority" ||
+        parsed.sortMode === "tier" ||
+        parsed.sortMode === "name" ||
+        parsed.sortMode === "starred"
+          ? parsed.sortMode
+          : defaults.sortMode,
+      leadStatusFilter:
+        parsed.leadStatusFilter === "all" ||
+        LEAD_STATUS_OPTIONS.includes(parsed.leadStatusFilter as LeadStatus)
+          ? (parsed.leadStatusFilter as PersistedUi["leadStatusFilter"])
+          : defaults.leadStatusFilter,
+      websiteStatusFilter:
+        parsed.websiteStatusFilter === "all" ||
+        WEBSITE_OPTIONS.includes(parsed.websiteStatusFilter as WebsiteStatus)
+          ? (parsed.websiteStatusFilter as PersistedUi["websiteStatusFilter"])
+          : defaults.websiteStatusFilter,
+      searchQuery:
+        typeof parsed.searchQuery === "string"
+          ? parsed.searchQuery
+          : defaults.searchQuery,
+    };
+  } catch {
+    return defaults;
+  }
+}
+
+function savePersistedUi(data: PersistedUi) {
+  localStorage.setItem(UI_STORAGE_KEY, JSON.stringify(data));
 }
 
 function newId(): string {
@@ -304,13 +356,9 @@ export default function LeadTracker() {
   /** Until you expand another lead or collapse, newest “Add business” row stays first in the list. */
   const [pinToTopId, setPinToTopId] = useState<string | null>(null);
   const expandedCardRef = useRef<HTMLElement | null>(null);
-  const [sortMode, setSortMode] = useState<"priority" | "tier" | "name" | "starred">(
-    "priority"
-  );
+  const [sortMode, setSortMode] = useState<"priority" | "tier" | "name" | "starred">("priority");
   const [leadStatusFilter, setLeadStatusFilter] = useState<"all" | LeadStatus>("all");
-  const [websiteStatusFilter, setWebsiteStatusFilter] = useState<"all" | WebsiteStatus>(
-    "all"
-  );
+  const [websiteStatusFilter, setWebsiteStatusFilter] = useState<"all" | WebsiteStatus>("all");
   const [searchQuery, setSearchQuery] = useState("");
 
   useEffect(() => {
@@ -322,6 +370,11 @@ export default function LeadTracker() {
       }
       setLeads(merged);
       setMeta(p.meta);
+      const ui = loadPersistedUi();
+      setSortMode(ui.sortMode);
+      setLeadStatusFilter(ui.leadStatusFilter);
+      setWebsiteStatusFilter(ui.websiteStatusFilter);
+      setSearchQuery(ui.searchQuery);
       setMounted(true);
     });
   }, []);
@@ -337,6 +390,16 @@ export default function LeadTracker() {
     }
     savePersisted({ leads, meta });
   }, [mounted, leads, meta]);
+
+  useEffect(() => {
+    if (!mounted) return;
+    savePersistedUi({
+      sortMode,
+      leadStatusFilter,
+      websiteStatusFilter,
+      searchQuery,
+    });
+  }, [mounted, sortMode, leadStatusFilter, websiteStatusFilter, searchQuery]);
 
   useEffect(() => {
     if (pinToTopId === null) return;
